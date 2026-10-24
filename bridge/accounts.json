@@ -1,0 +1,30 @@
+[
+  {
+    "id": "mdisaahamedsan.ph",
+    "label": "mdisaahamedsan.ph",
+    "email": "mdisaahamedsan.ph@gmail.com",
+    "isPrimary": true,
+    "color": "#e06e43"
+  },
+  {
+    "id": "shanisaa491411",
+    "label": "shanisaa491411",
+    "email": "shanisaa491411@gmail.com",
+    "isPrimary": false,
+    "color": "#38bdf8"
+  },
+  {
+    "id": "glordgotnfsheat",
+    "label": "glordgotnfsheat",
+    "email": "glordgotnfsheat@gmail.com",
+    "isPrimary": false,
+    "color": "#a855f7"
+  },
+  {
+    "id": "isaahamedsanextra1",
+    "label": "isaahamedsanextra1",
+    "email": "isaahamedsanextra1@gmail.com",
+    "isPrimary": false,
+    "color": "#10b981"
+  }
+]

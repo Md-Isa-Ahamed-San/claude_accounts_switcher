@@ -1,0 +1,200 @@
+<!-- Sync note: the source of truth for this guide is the copy in Chad's Drive (My Drive/Claude/Guides/Two Claude desktop apps/MULTI-ACCOUNT-CLAUDE-SETUP-GUIDE.md). A copy is published at https://chadtimbl.in/writings/files/multi-account-claude-setup-guide.md. After editing the source, re-copy it into the website repo (chad-timblin/public/writings/files/multi-account-claude-setup-guide.md) so the published version stays current. -->
+
+# Run a Separate Claude Desktop App for Each Claude Account
+
+**A setup guide you hand to Claude Code.** It sets up one Claude desktop app instance per Claude account (for example, personal and work), running side by side, each permanently signed in. No more logging out and back in to switch accounts.
+
+---
+
+## For the human (read this part, skip the rest)
+
+**What you need:** a Mac with the Claude desktop app installed, at least two Claude accounts, and Claude Code (in the terminal or in the desktop app). Windows users: see the appendix at the end. The idea is the same, but those steps are unverified, and the current Windows installer takes extra work.
+
+**How to use this guide:** open Claude Code and say something like:
+
+> Read the file MULTI-ACCOUNT-CLAUDE-SETUP-GUIDE.md and set this up for me. My primary account (currently signed in) is A@example.com, and my second account is B@company.com. Call them "Personal" and "Work".
+
+Claude does everything except type your passwords. At the end you'll sign in once with the second account, and that's it.
+
+**Is it safe?** Yes, and fully reversible. The setup only ADDS two small launcher apps and one new data folder. Your existing app, sign-in, conversations, and settings are never touched. Undo = delete the launchers and the new folder.
+
+**Where this comes from:** the core trick is from [a Reddit thread](https://redd.it/1rkdigx) (r/ClaudeAI, March 2026), hardened with fixes for several problems found while setting it up for real (details woven in below). Longer write-up: [chadtimbl.in/writings/claude-workflow-tips.html#multiple-accounts](https://chadtimbl.in/writings/claude-workflow-tips.html#multiple-accounts).
+
+---
+
+## For Claude Code: instructions
+
+You are setting up multiple isolated instances of the Claude desktop app, one per account. Read this whole guide before acting. Facts below were verified 2026-07-11 on macOS with Claude desktop v1.20186.1; re-verify anything version-sensitive on the target machine rather than assuming.
+
+### Ground rules (non-negotiable)
+
+1. **Never modify, move, rename, or duplicate `/Applications/Claude.app`.** Duplicated copies fall out of sync when the app auto-updates. Every launcher points at the one real app.
+2. **Never write into the user's existing default profile** (`~/Library/Application Support/Claude`). It stays the primary account's home, untouched.
+3. **Never launch the same profile twice.** On a Mac, the app has NO single-instance lock: two processes started with the same `--user-data-dir` will happily share one data folder, which risks corrupting it. The launchers you build below guard against this; also don't do it yourself during testing.
+4. **Sign-ins are the user's job.** Never handle their passwords. Sign-ins must happen with only ONE instance running: the `claude://` OAuth callback is delivered to whichever instance is open, so with two open it can land in the wrong one.
+5. **Mind your own runtime.** If you are running inside the Claude desktop app, quitting that app kills your session, so hand any step requiring a quit to the user as written instructions. Sandboxed sessions often cannot read or write `~/Library`; if you hit that, tell the user to run this guide from Claude Code in a terminal instead.
+6. **Nothing here is destructive.** The only thing you may delete is a scratch/test profile you created yourself in this session.
+
+### Step 1: Gather inputs
+
+Ask the user (if they didn't already say): the two account emails, and a short label for each (defaults: "Personal" and "Work"). Conventions used below:
+
+- The **primary** account is whichever is signed into the app right now. It keeps the default profile and gets launcher "Claude \<Label1\>".
+- The **second** account gets a new profile folder `~/Library/Application Support/Claude-<Label2>` and launcher "Claude \<Label2\>".
+- More than two accounts work the same way: one profile folder and one launcher per extra account. Make sure no profile folder name is a prefix of another (e.g. avoid `Claude-Work` plus `Claude-Work2`), because the launcher guards match on that name.
+
+### Step 2: Preflight checks
+
+- Confirm the app exists and note its version: `defaults read "/Applications/Claude.app/Contents/Info.plist" CFBundleShortVersionString`
+- List existing profiles: `ls ~/Library/Application\ Support/ | grep -i claude` (expect `Claude`; leave anything else alone)
+- See what's running: `ps axo pid,command | grep -e '/Applications/Claude\.app/Contents/MacOS/[C]laude' | grep -v -e '--type='` (main processes only; the `[C]` trick stops grep matching itself)
+- Confirm `/Applications` is writable; fall back to `~/Applications` for the launchers if not.
+
+### Step 3: Verify the mechanism with a throwaway profile
+
+Before building anything, prove this app version honors the flag. Warn the user a test window will briefly appear, then:
+
+```sh
+open -n -a "/Applications/Claude.app" --args --user-data-dir="/tmp/claude-profile-test"
+```
+
+Within a few seconds you should see (a) a new main process whose command line carries that flag, and (b) `/tmp/claude-profile-test` populated with Cookies, Local Storage, Preferences, etc. That confirms isolation works. Then clean up: kill only PIDs whose command line contains the scratch path, and `rm -rf` the scratch folder.
+
+If no isolated profile appears, STOP: this app version no longer honors `--user-data-dir`, and the approach needs rethinking. Tell the user.
+
+### Step 4: Build the guarded launchers
+
+Each launcher is a small AppleScript app. Logic: find this account's running instance via `ps`; if found, focus it by process id (never relaunch, per ground rule 3); if not found, launch a new instance with the right profile. Compile each with `osacompile -o "/Applications/Claude <Label>.app" <source.applescript>`.
+
+**Launcher for the primary account** (default profile; note it detects a main process with NO `user-data-dir` in its command line, which is what a plain launch looks like):
+
+```applescript
+set pidText to do shell script "ps axo pid=,command= | grep -e '/Applications/Claude\\.app/Contents/MacOS/[C]laude' | grep -v -e '--type=' | grep -v -e 'user-data-dir' | awk '{print $1}' | head -n1"
+if pidText is "" then
+	do shell script "open -n -a '/Applications/Claude.app'"
+else
+	try
+		tell application "System Events" to set frontmost of (first process whose unix id is (pidText as integer)) to true
+	end try
+end if
+```
+
+**Launcher for the second account** (replace `Claude-Work` with the actual profile folder name, in both places):
+
+```applescript
+set pidText to do shell script "ps axo pid=,command= | grep -e '/Applications/Claude\\.app/Contents/MacOS/[C]laude' | grep -v -e '--type=' | grep -F 'Claude-Work' | awk '{print $1}' | head -n1"
+if pidText is "" then
+	do shell script "open -n -a '/Applications/Claude.app' --args --user-data-dir=\"$HOME/Library/Application Support/Claude-Work\""
+else
+	try
+		tell application "System Events" to set frontmost of (first process whose unix id is (pidText as integer)) to true
+	end try
+end if
+```
+
+Notes for you, the agent:
+
+- The `[C]laude` character-class trick and the `try` block are load-bearing. The first prevents the pipeline from matching its own shell process (which would make the launcher think an instance is running when none is). The second makes a denied Automation permission harmless.
+- The first time a launcher takes the focus path, macOS asks the user to let it control "System Events". Tell the user to click Allow (denying only disables auto-focus).
+- Smoke-test the second-account launcher: open it, verify exactly one new main process with the new profile folder, then kill that instance and `rm -rf` the new profile folder so the user's first real sign-in starts pristine. Do NOT smoke-test the double-click/focus path (it would trigger the permission prompt at a moment the user isn't expecting).
+
+### Step 5 (optional): custom launcher icons
+
+The default script-scroll applet icon already distinguishes launchers from the real app. If the user wants custom icons: take their square image, render it centered at 824px on a transparent 1024px canvas (Apple's icon grid; a full-bleed image looks oversized in the Dock), generate an iconset (`sips -z` at 16/32/128/256/512 plus @2x each), build with `iconutil -c icns`, overwrite `Contents/Resources/applet.icns` inside the launcher, re-sign with `codesign --force --sign -`, then `killall Dock` (warn the user the Dock will blink). Never re-icon the real app.
+
+### Step 6: Hand off the sign-in (the user does this)
+
+Give the user these steps, then wait:
+
+1. Drag both launchers from Applications into the Dock.
+2. Quit Claude fully (click its window, Cmd+Q). If your Claude Code session lives inside that app, it pauses here; everything needed is already written down.
+3. Click "Claude \<Label2\>" in the Dock. A fresh instance opens; sign in with the second account.
+4. Click "Claude \<Label1\>" (or the plain Claude icon). The primary account is still signed in.
+5. From now on, switch accounts by clicking the launchers. Both instances can run at once.
+
+Dock cosmetics to warn them about: while both run, the two RUNNING tiles show the identical Claude icon (unavoidable without duplicating the app, which is forbidden), and after a Dock restart macOS sometimes coalesces them into one tile. Both states are harmless; the launchers always find the right instance because they go by process, not by Dock tile. To quit one instance only: click its window first, then Cmd+Q.
+
+### Step 7: Migrate per-account things (check, don't assume)
+
+- **claude.ai-side things follow the login automatically:** conversations, projects, account-level connectors. Nothing to do.
+- **Desktop-app-side MCP servers do not.** `claude_desktop_config.json` lives inside each profile folder, so the new instance starts with none. Copy over any entries the second account needs from the old profile's config, then restart that instance.
+- **Scheduled tasks are per account and only run while that account is signed in inside a running instance.** Tasks made in the app's chat live at `<profile>/local-agent-mode-sessions/<org-uuid>/<account-uuid>/scheduled-tasks.json`, and Claude Code's at `<profile>/claude-code-sessions/<org-uuid>/<account-uuid>/scheduled-tasks.json`. If the user previously juggled both accounts in one app, the old default profile may contain a registry under the SECOND account's context; those tasks will never run again once the default app stays signed into the primary account. Migrate them:
+  1. After the user's first sign-in, the new profile creates its own `<org-uuid>/<account-uuid>/` folders. Verify they match the old profile's second-account context (the UUIDs are account-derived and stable).
+  2. With the second instance QUIT (it reads the registry at launch), write the task entries into the new profile's matching `scheduled-tasks.json`. Copy fields exactly; drop stale `notifySessionId` values (they point at sessions in the old profile) and keep `lastRunAt` so the scheduler doesn't fire catch-up runs.
+  3. Set `"enabled": false` on the old copies, in place. Keep that file as a backup; do not delete it.
+  4. Have the user relaunch and ask that instance to list its scheduled tasks with next run times. Next runs a few minutes past the cron time are normal (the app staggers runs).
+- **`~/.claude` is shared by all instances** (Claude Code config, skills, global CLAUDE.md, session history), since it's per Mac user, not per profile. Nothing to migrate, but tell the user: anything in their global CLAUDE.md now applies to sessions in every instance, so account-specific instructions belong in per-folder CLAUDE.md files instead.
+
+### Step 8: Verify, then document
+
+Verify: both instances running at once with distinct profiles (`ps` check from step 2); each launcher focuses rather than relaunches its running instance; migrated scheduled tasks (if any) listed with sane next-run times.
+
+Finally, write the user a README.md (in a folder they choose) recording: what was created and where, the per-profile paths, the rules (sign in with one instance open, never double-launch a profile, never duplicate the app), what's shared vs. separate, and the recovery procedure below. Future sessions, and future humans, will thank you.
+
+**Recovery, for the README:** to reset the second account's instance, quit it, delete its profile folder, relaunch its launcher, sign in fresh. The primary profile is never involved. To undo the entire setup, delete the launchers and the extra profile folder(s).
+
+---
+
+## Appendix: Windows
+
+**These steps are unverified.** Everything above was checked on a Mac. Nothing in this appendix was checked on a Windows machine, and one Windows user reported that an earlier version of these steps did not work with the MSIX installer. Another reported in October 2026 that Claude version 2.42304 stopped the second instance from opening; see "Version 2.42304 and later" below. Test each step on the target machine before relying on it.
+
+### Find the app
+
+Claude Desktop for Windows now installs as an MSIX package, which changes where everything lives. Check with PowerShell:
+
+`Get-AppxPackage *Claude* | Select-Object InstallLocation`
+
+- **If that returns a path,** it is an MSIX install. The executable is `<InstallLocation>\app\Claude.exe`, inside the protected `C:\Program Files\WindowsApps` folder. The folder name includes the version, so it changes with every update: look it up each time instead of saving the path. The older path, `%LOCALAPPDATA%\AnthropicClaude\claude.exe`, does not exist. The default profile's data is redirected from `%APPDATA%\Claude` to `%LOCALAPPDATA%\Packages\Claude_pzs8sxrjxfjjc\LocalCache\Roaming\Claude`.
+- **If it returns nothing,** it is an older install. The executable should be `%LOCALAPPDATA%\AnthropicClaude\claude.exe`, and the default profile's data should be in `%APPDATA%\Claude`.
+
+### Test the mechanism
+
+With the other instance closed, launch the executable with a throwaway profile, the same test as step 3:
+
+`"<path to Claude.exe>" --user-data-dir="%TEMP%\claude-profile-test"`
+
+Success looks the same as on a Mac: a new process carrying the flag, and the test folder filling with profile data. On an MSIX install the folder may appear under the redirected `LocalCache` path instead of where you pointed it, so check both.
+
+Reports differ on whether Windows allows this launch for an MSIX install. Some people run the executable in place. Others find that Windows refuses to run it from `WindowsApps`, and work around that by mirroring the package's `app` folder to an ordinary folder and launching the copy. A copy breaks ground rule 1: it does not update with the app, so it has to be mirrored again after every Claude update. Explain that tradeoff to the user and get their agreement before making one.
+
+If no launch produces an isolated profile, STOP and tell the user.
+
+### Version 2.42304 and later: give the second instance its own LOCALAPPDATA
+
+A reader reported this in October 2026 on an MSIX install; it has not been checked here. From version 2.42304, the Windows app takes a single-instance lock in `%LOCALAPPDATA%\Claude-Data\<package family>`, and `--user-data-dir` does not change where that lock lives. A second instance finds the lock held by the first, hands off to it, and exits silently with code 0. The test above runs with the other instance closed, so it passes anyway. Repeat it with the primary instance open to find out whether this machine has the lock.
+
+The reported fix is to launch the second instance with its own `LOCALAPPDATA` while keeping `--user-data-dir`. The reader's existing second profile kept its sign-in. As a PowerShell launcher script (replace `work` and `Work` with the second account's label):
+
+```powershell
+$app = (Get-AppxPackage Claude).InstallLocation
+$env:LOCALAPPDATA = "$env:USERPROFILE\.claude-work-localappdata"
+New-Item -ItemType Directory -Force $env:LOCALAPPDATA | Out-Null
+Start-Process "$app\app\Claude.exe" -ArgumentList "--user-data-dir=`"$env:APPDATA\Claude-Work`""
+```
+
+- Save it as a `.ps1` file and run it from the shortcut below. Don't paste it into an open PowerShell window: that window keeps the changed `LOCALAPPDATA` until it is closed.
+- Everything the second instance starts (MCP servers, Claude Code, Node and npm caches) inherits the changed `LOCALAPPDATA`, so those tools keep separate caches and settings for that account. Tell the user.
+- The `CLAUDE_USER_DATA_DIR` environment variable is not an alternative: signed builds ignore it.
+
+### Create the shortcuts
+
+Once a launch command works:
+
+1. Create a Desktop shortcut that runs it with `--user-data-dir="%APPDATA%\Claude-Work"`, and name it "Claude Work". If the command depends on the versioned `WindowsApps` path, have the shortcut run a short script that looks the path up at launch, so it keeps working after updates. If the version 2.42304 lock applies, that script is the launcher above, and the shortcut's target is `powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "<path to script>.ps1"`.
+2. The primary account needs no new shortcut. The user opens Claude the way they always have.
+3. Have the user sign in to the second account with the other instance closed.
+
+The same rules apply: one sign-in at a time, and never launch the same profile twice. The scheduled-task and MCP-config notes in step 7 apply on Windows too, using the profile folders you found above.
+
+---
+
+## Facts reference (verified 2026-07-11, macOS, Claude desktop v1.20186.1)
+
+- `--user-data-dir` is honored and gives full profile isolation (login, cookies, settings, connectors, conversations cache).
+- The app holds NO single-instance lock: same-profile double launches really do produce two processes on one folder. Hence the guarded launchers. This is a macOS fact; on Windows, version 2.42304 reportedly added a lock (see the appendix).
+- `claude://` login callbacks route to whichever instance is running: sign in with exactly one open.
+- One shared app bundle means one auto-update path; after an update it's good hygiene to relaunch both instances.
+- Scheduled-task registries are per account under `local-agent-mode-sessions/<org-uuid>/<account-uuid>/`, and the org/account UUIDs are stable across profiles for the same account.
+- Sandboxed sessions may be blocked from `~/Library` and similar host paths; profile-folder surgery needs a full-access Claude Code session or manual hands.
+- Dock tiles for two instances of one app can coalesce into a single tile after the Dock process restarts; cosmetic only.
